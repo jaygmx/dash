@@ -2,99 +2,76 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What this repo is
+## What this is
 
-`dash` is a **port-in-progress**, not yet a built app. The workspace currently contains
-only the porting brief — there is no `package.json`, source, or git repo yet. The job is
-to recreate the live `../jug` site (Astro 5 + React 18 on Cloudflare Pages/KV) as a
-**Next.js App Router app deployable on Vercel**, with full visual and functional parity.
+**Dash** — a handmade, card-catalogue dashboard for bookmarks ("an index of elsewhere").
+Next.js 15 App Router + React 18 on Vercel, ported from the Astro 5 / Cloudflare original
+at `../jug`. **Live: https://dash.brevy.dev** · repo: `github.com/jaygmx/dash` (pushing
+`main` auto-deploys via Vercel's Git integration).
 
-**The canonical spec is [`dash-port.claude.instructions.md`](./dash-port.claude.instructions.md).**
-It is authoritative and far more detailed than this file — read it before doing any porting
-work. It defines the target architecture, the full requirement list, constraints, the
-quality bar, and verification steps. This CLAUDE.md only orients you and records facts that
-require reading across the source tree to assemble. When the two disagree, the instructions
-file wins; keep both in sync if you change direction.
-
-Two product decisions are still **open** (do not assume — ask the user): whether visible
-copy stays "Jay's Catalogue" or is rebranded to "dash", and whether production data is
-migrated from Cloudflare KV or `dash` starts from presets + empty cloud store.
-
-## Source app being ported (`../jug`)
-
-`../jug` is the source of truth for behavior — **inspect it directly, not just its README**
-(the README lags the implementation; features like cover images, metadata autofill,
-cloud-synced appearance, and editable drawers are newer). It is a separate git repo.
-
-- **Stack:** Astro 5, React 18, Tailwind 3, Radix (Dialog/Label/Slot), lucide-react, CVA,
-  clsx, tailwind-merge, tailwindcss-animate. Cloudflare Pages Functions + Cloudflare KV.
-- **UI shell** is a single client island: `src/components/Dashboard.tsx` holds the state
-  machine (local cache → cloud refresh → 800ms-debounced push), search, filters, dialogs,
-  and keyboard shortcuts. `src/pages/index.astro` + `src/layouts/Layout.astro` render the
-  shell and a pre-paint no-flash theme/appearance script.
-- **Domain libs** (`src/lib/`): `types.ts` (the `Bookmark` shape), `drawers.ts` (dynamic
-  categories — slug/code derivation, validation, max 32, delete-blocked-when-non-empty),
-  `appearance.ts` (5 palettes × 5 font pairs, `normalizeAppearance`), `presets.ts`
-  (`withPresets` merge), `storage.ts` (localStorage cache + normalization helpers),
-  `cloud.ts` (client fetch layer + `CloudUnavailableError`/`CloudUnauthorizedError`).
-- **Backend** (`functions/`): Pages Functions mapping 1:1 to `/api/{auth,bookmarks,drawers,
-  appearance,meta}`. `functions/_lib/auth.ts` holds the shared HMAC token helpers.
-
-### Data & API contracts to preserve exactly
-
-- **KV keys → Redis keys (unchanged):** `bookmarks:default`, `drawers:default`,
-  `appearance:default`. Store **JSON strings** (parity with KV + the `djb2` version hash).
-- **API paths unchanged:** `/api/auth` (POST), `/api/bookmarks` (GET public / PUT,DELETE
-  token-gated; returns `{ bookmarks, version }`), `/api/drawers` (GET/PUT), `/api/appearance`
-  (GET/PUT), `/api/meta` (POST, token-gated).
-- **localStorage keys unchanged** (preserves session/cache continuity across the migration),
-  e.g. the cloud token lives at `jay.portal.cloud-token.v1`. Renaming requires a one-time
-  migration shim.
-- **Auth model (security boundary — keep byte-identical):** passcode (`EDIT_PASSCODE`) is
-  exchanged at `/api/auth` for a stateless bearer token of shape `<expiryMillis>.<hexHmac>`,
-  HMAC-SHA256 over the expiry string keyed by `AUTH_SECRET`, 60-minute TTL. Tokens are
-  **never persisted server-side** — `verifyToken` is purely cryptographic, and `safeEqual`
-  is constant-time. Reads are public; all writes require a valid token.
-- **Payload limits (≥ source):** bookmarks JSON ≤ 2 MB, inlined cover image ≤ 100 KB,
-  drawers ≤ 32.
-
-## Porting gotchas (Cloudflare → Vercel)
-
-- **Storage:** Cloudflare KV → **Upstash Redis** (`@upstash/redis`, `Redis.fromEnv()`).
-  Put it in a **server-only** module (e.g. `src/lib/server/kv.ts`). Normalize parsed values
-  defensively — the Redis client may auto-deserialize JSON depending on how it was written.
-- **HTML parsing:** the `/api/meta` endpoint uses Cloudflare `HTMLRewriter`, which does not
-  exist on Vercel. Replace with a Node-compatible parser (`htmlparser2` or similar) while
-  preserving robots.txt handling, entity decoding, JSON-LD keyword extraction, cover
-  inlining, timeouts, and error messages.
-- **Secrets must never reach the client bundle:** `EDIT_PASSCODE`, `AUTH_SECRET`,
-  `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`. Keep arbitrary-URL metadata fetching
-  server-side and token-gated. Mark interactive React files `"use client"` and keep
-  server-only code out of them.
-- **Covers use plain `<img>`, not `next/image`** — covers can be arbitrary remote URLs or
-  `data:image/...` URIs.
-- **Security headers** from the source `public/_headers` must be reproduced via
-  `next.config.ts` `headers()` (or `vercel.json`): `X-Content-Type-Options: nosniff`,
-  `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`,
-  `Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()`,
-  long-immutable caching for static assets, 1-week favicon caching.
+The full port spec + the rebrand/hero/storage decisions live in
+[`dash-port.claude.instructions.md`](./dash-port.claude.instructions.md) — read it for the
+"why" behind anything non-obvious. `../jug` remains the behavioral reference (read it
+directly; its README lags the implementation).
 
 ## Commands
 
-Target `dash` scripts (to be created during scaffolding; verify against the generated
-`package.json`):
-
 ```bash
-npm install
-npm run dev      # Next dev server (localhost:3000)
-npm run lint
-npm run build    # must succeed — part of the quality bar
+npm run dev      # http://localhost:3000
+npm run build    # production build (TypeScript errors fail it; ESLint is not a build gate)
 npm run start
+npm run check    # tsc --noEmit
+npm test         # vitest — auth, normalizers, + the ASCII User-Agent guard
 ```
 
-Local dev needs `.env.local` with `EDIT_PASSCODE`, `AUTH_SECRET`, `UPSTASH_REDIS_REST_URL`,
-`UPSTASH_REDIS_REST_TOKEN`.
+Dev + edit mode need `.env.local` (see **Environment**). They work against the same live
+Cloudflare KV the production site uses, so local edits write to real cloud state.
 
-For reference, the **source** `../jug` runs on Astro: `npm run dev` (port 4444),
-`npm run build` (`astro build` → `./dist`), `npm run preview:cf` (Cloudflare Functions
-runtime, needs `.dev.vars`), `npm run deploy` (build + `wrangler pages deploy ./dist`).
+## Architecture (big picture)
+
+- **One client island.** `app/page.tsx` (server) renders `src/components/Dashboard.tsx`
+  (`"use client"`) — the only component that needs the directive; its whole subtree is
+  client. Dashboard owns all state: local cache → cloud refresh → **800 ms debounced**
+  bookmark push, search, filters, dialogs, and keyboard shortcuts.
+- **No-flash theming.** `app/layout.tsx` injects an inline pre-paint script that reads
+  `localStorage` (`jay.portal.*` keys — kept from the source for session continuity) and
+  sets `dark` class + `data-theme`/`data-font` before first paint. Five palettes × five
+  font pairs are pure CSS-variable swaps in `app/globals.css`.
+- **Animated hero.** `src/components/HeroMark.tsx` — an SVG card-catalogue scene (cards
+  filing up, "FILED" stamp, punch-holes, a self-drawing accent em-dash = the "Dash" mark).
+  Every fill/stroke is `hsl(var(--…))`, so it tracks the active palette + light/dark; all
+  motion collapses to a still frame under `prefers-reduced-motion`. Sits in a band between
+  the masthead and the card grid (compact — the catalogue is still the first screen).
+- **API** (`app/api/*/route.ts`, **Node runtime**): `auth` (passcode→token, POST only),
+  `bookmarks` (public GET / token PUT,DELETE; `{bookmarks, version}` via djb2),
+  `drawers` + `appearance` (public GET / token PUT), `meta` (token-gated URL metadata —
+  robots.txt aware, og/twitter image inlining, JSON-LD keywords).
+- **Storage** (`src/lib/server/kv.ts`): thin adapter over the **Cloudflare KV REST API**
+  (`kvGet`/`kvPut`/`kvDel`), reusing the original `BOOKMARKS_KV` namespace. Keys
+  `bookmarks:default`, `drawers:default`, `appearance:default`, stored as JSON strings.
+  **To change stores, edit only this file.**
+- **Auth** (`src/lib/server/auth.ts`): stateless HMAC-SHA256 tokens `<expiry>.<hexHmac>`,
+  60-min TTL, verified purely cryptographically (never persisted); constant-time `safeEqual`.
+- **Pure libs** (`src/lib/*.ts`): `types`, `drawers`, `appearance`, `presets`, `storage`,
+  `cloud` (client fetch layer) — ported verbatim from `../jug`, behavior unchanged.
+
+## Conventions / gotchas
+
+- **`@/*` → `src/*`** (tsconfig). App Router files live in `app/`; everything else in `src/`.
+- **HTTP header values must be ASCII** (Latin-1). `app/api/meta/route.ts`'s `USER_AGENT`
+  once contained an em-dash → Node/undici `fetch` threw "Cannot convert argument to a
+  ByteString" (Cloudflare Workers tolerated it). Guarded by a unit test in
+  `src/lib/units.test.ts` — keep that line ASCII.
+- **Covers use plain `<img>`**, never `next/image` — they can be arbitrary remote URLs or
+  `data:` URIs.
+- **Brand = "Dash"**; "catalogue" survives only as a common noun (the library-card metaphor).
+- **Secrets are server-only** and excluded from Vercel uploads by `.vercelignore`. Never
+  import `src/lib/server/*` into a client component.
+- Tailwind **v3** (matches the source CSS directives + `tailwind.config.mjs`), not v4.
+
+## Environment (all server-only)
+
+`EDIT_PASSCODE`, `AUTH_SECRET`, `CF_ACCOUNT_ID`, `CF_KV_NAMESPACE_ID`, `CF_KV_API_TOKEN`.
+Set in `.env.local` for dev and in the Vercel project for production. The CF token currently
+deployed is a broad account token — **rotating it to a KV-scoped token is a known follow-up**
+(account lacked the API-token-create permission at deploy time).
