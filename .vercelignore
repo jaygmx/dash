@@ -1,0 +1,9 @@
+# Never upload local env to Vercel — production env comes only from the Vercel
+# project. A local .env reaching Vercel would override cloud config at runtime.
+.env
+.env.local
+.env.*.local
+.dev.vars
+node_modules
+.next
+.git

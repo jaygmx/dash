@@ -1,0 +1,37 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# next build output
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+
+# vercel
+.vercel
+
+# cloudflare / wrangler
+.dev.vars
+.wrangler/
+
+# editor
+.vscode/
+.idea/
+.DS_Store
+
+# archives + large media
+*.zip
+*.tar.gz
+*.tgz
+
+# ignored archive of finished plans/handoffs
+_archive/
+
+# verification artifacts
+.playwright-mcp/
