@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { signIn } from "next-auth/react";
+import { LogoMark } from "@/components/LogoMark";
 
 interface Providers {
   credentials: boolean;
@@ -59,6 +60,7 @@ export function LoginCard({
     <div className="login-card w-full max-w-[400px]">
       {/* Masthead */}
       <div className="flex flex-col items-center text-center gap-1.5 mb-7">
+        <LogoMark className="h-14 w-14 mb-1" />
         <span className="font-mono text-[10px] uppercase tracking-[0.32em] text-muted-foreground">
           Vol. I · Ed. 01
         </span>

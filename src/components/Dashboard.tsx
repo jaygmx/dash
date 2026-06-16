@@ -4,6 +4,7 @@ import * as React from "react";
 import { Plus, Keyboard, Palette, LogOut } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { HeroMark } from "./HeroMark";
+import { LogoMark } from "./LogoMark";
 import { BookmarkCard } from "./BookmarkCard";
 import { BookmarkForm } from "./BookmarkForm";
 import { SearchBar } from "./SearchBar";
@@ -439,6 +440,7 @@ export function Dashboard() {
       >
         <div className="container max-w-[1400px] flex flex-wrap items-center gap-x-3 gap-y-2 py-3">
           <div className="flex items-baseline gap-3 min-w-0">
+            <LogoMark className="h-6 w-6 sm:h-7 sm:w-7 shrink-0 self-center" />
             <span
               className={cn(
                 "font-mono text-[10px] uppercase tracking-[0.32em] text-muted-foreground whitespace-nowrap",

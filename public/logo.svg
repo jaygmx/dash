@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 72" role="img" aria-label="Dash — an index of elsewhere">
+  <style>
+    .ink    { fill: #1A1714 }
+    .stroke { stroke: #1A1714 }
+    .card   { fill: #F8F2E7 }
+    .acc    { fill: #DD3B1E }
+    .muted  { fill: #1A1714; opacity: .6 }
+    @media (prefers-color-scheme: dark) {
+      .ink    { fill: #EDE3D4 }
+      .stroke { stroke: #EDE3D4 }
+      .card   { fill: #1E1A15 }
+      .acc    { fill: #F0532E }
+      .muted  { fill: #EDE3D4; opacity: .6 }
+    }
+  </style>
+
+  <!-- mark: the index card, scaled from the 64-unit favicon art -->
+  <g transform="translate(6,10) scale(0.8)">
+    <rect class="card stroke" x="11" y="13" width="42" height="38" stroke-width="2.5"/>
+    <circle class="ink" cx="24" cy="22" r="2.4"/>
+    <circle class="ink" cx="32" cy="22" r="2.4"/>
+    <circle class="ink" cx="40" cy="22" r="2.4"/>
+    <rect class="acc" x="20" y="30" width="24" height="7"/>
+    <rect class="ink" x="20" y="44" width="16" height="1.6" opacity="0.5"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="70" y="45" font-family="'Instrument Serif', Georgia, 'Times New Roman', serif"
+        font-style="italic" font-size="42" class="ink">Dash</text>
+
+  <!-- accent em-dash + tagline (the "Dash" mark drawn as punctuation) -->
+  <rect class="acc" x="71" y="56" width="26" height="3.5"/>
+  <text x="105" y="60" font-family="ui-monospace, 'SFMono-Regular', Menlo, monospace"
+        font-size="9" letter-spacing="2.5" class="muted">AN INDEX OF ELSEWHERE</text>
+</svg>
