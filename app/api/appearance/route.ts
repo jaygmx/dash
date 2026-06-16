@@ -1,4 +1,5 @@
-import { jsonResponse, verifyToken } from "@/lib/server/auth";
+import { jsonResponse, unauthorized } from "@/lib/server/http";
+import { requireOwner } from "@/lib/server/nextauth";
 import { kvGet, kvPut } from "@/lib/server/kv";
 
 export const runtime = "nodejs";
@@ -25,12 +26,8 @@ function isFont(v: unknown): v is FontKey {
   return typeof v === "string" && (FONT_KEYS as readonly string[]).includes(v);
 }
 
-function bearer(request: Request): string {
-  const auth = request.headers.get("authorization") ?? "";
-  return auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
-}
-
 export async function GET(): Promise<Response> {
+  if (!(await requireOwner())) return unauthorized();
   const raw = await kvGet(KEY);
   if (!raw) return jsonResponse({ appearance: DEFAULT_APPEARANCE });
   try {
@@ -46,17 +43,7 @@ export async function GET(): Promise<Response> {
 }
 
 export async function PUT(request: Request): Promise<Response> {
-  const AUTH_SECRET = process.env.AUTH_SECRET;
-  if (!AUTH_SECRET) {
-    return jsonResponse(
-      { error: "Cloud auth not configured (missing AUTH_SECRET)." },
-      { status: 500 },
-    );
-  }
-  const token = bearer(request);
-  if (!token || !(await verifyToken(token, AUTH_SECRET))) {
-    return jsonResponse({ error: "Unauthorized." }, { status: 401 });
-  }
+  if (!(await requireOwner())) return unauthorized();
 
   let payload: Partial<Appearance> = {};
   try {

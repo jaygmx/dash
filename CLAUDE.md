@@ -24,15 +24,18 @@ npm run check    # tsc --noEmit
 npm test         # vitest — auth, normalizers, + the ASCII User-Agent guard
 ```
 
-Dev + edit mode need `.env.local` (see **Environment**). They work against the same live
-Cloudflare KV the production site uses, so local edits write to real cloud state.
+The whole site sits behind a login wall (NextAuth). Dev needs `.env.local` (see
+**Environment**) — the auth vars to sign in, plus the Upstash creds to load/save data,
+which is Vercel-hosted Upstash Redis (local edits write to real cloud state).
 
 ## Architecture (big picture)
 
-- **One client island.** `app/page.tsx` (server) renders `src/components/Dashboard.tsx`
-  (`"use client"`) — the only component that needs the directive; its whole subtree is
-  client. Dashboard owns all state: local cache → cloud refresh → **800 ms debounced**
-  bookmark push, search, filters, dialogs, and keyboard shortcuts.
+- **One client island.** `app/page.tsx` (server) checks the NextAuth session (redirects to
+  `/login` if absent) then renders `src/components/Dashboard.tsx` (`"use client"`) — the
+  only component that needs the directive; its whole subtree is client. Dashboard owns all
+  state: local cache → cloud refresh → **800 ms debounced** bookmark push, search, filters,
+  dialogs, and keyboard shortcuts. Signed in ⇒ owner ⇒ always editable (no read-only mode);
+  the masthead has a **Sign out** control.
 - **No-flash theming.** `app/layout.tsx` injects an inline pre-paint script that reads
   `localStorage` (`jay.portal.*` keys — kept from the source for session continuity) and
   sets `dark` class + `data-theme`/`data-font` before first paint. Five palettes × five
@@ -42,16 +45,22 @@ Cloudflare KV the production site uses, so local edits write to real cloud state
   Every fill/stroke is `hsl(var(--…))`, so it tracks the active palette + light/dark; all
   motion collapses to a still frame under `prefers-reduced-motion`. Sits in a band between
   the masthead and the card grid (compact — the catalogue is still the first screen).
-- **API** (`app/api/*/route.ts`, **Node runtime**): `auth` (passcode→token, POST only),
-  `bookmarks` (public GET / token PUT,DELETE; `{bookmarks, version}` via djb2),
-  `drawers` + `appearance` (public GET / token PUT), `meta` (token-gated URL metadata —
-  robots.txt aware, og/twitter image inlining, JSON-LD keywords).
-- **Storage** (`src/lib/server/kv.ts`): thin adapter over the **Cloudflare KV REST API**
-  (`kvGet`/`kvPut`/`kvDel`), reusing the original `BOOKMARKS_KV` namespace. Keys
+- **API** (`app/api/*/route.ts`, **Node runtime**): `auth/[...nextauth]` (NextAuth handler),
+  `bookmarks` (`{bookmarks, version}` via djb2), `drawers`, `appearance`, `meta` (URL
+  metadata — robots.txt aware, og/twitter image inlining, JSON-LD keywords). Every data
+  route calls `requireOwner()` (NextAuth session) and 401s without it — no public read.
+- **Storage** (`src/lib/server/kv.ts`): thin adapter over **Upstash Redis** (`@upstash/redis`,
+  `automaticDeserialization:false` for raw-string parity), `kvGet`/`kvPut`/`kvDel`. Keys
   `bookmarks:default`, `drawers:default`, `appearance:default`, stored as JSON strings.
-  **To change stores, edit only this file.**
-- **Auth** (`src/lib/server/auth.ts`): stateless HMAC-SHA256 tokens `<expiry>.<hexHmac>`,
-  60-min TTL, verified purely cryptographically (never persisted); constant-time `safeEqual`.
+  **To change stores, edit only this file.** (Moved off Cloudflare KV via
+  `scripts/migrate-kv.mjs` — a one-shot CF→Upstash copy.)
+- **Auth** (NextAuth v5 — `src/lib/server/nextauth.ts` + edge-safe `auth.config.ts`): JWT
+  sessions, no DB. Three providers, each conditional on its env: Credentials (owner email +
+  bcrypt `AUTH_PASSWORD_HASH`, or a constant-time `EDIT_PASSCODE` fallback), GitHub, Google
+  — OAuth gated by the `AUTH_ALLOWED_EMAILS` allowlist (`src/lib/server/allowlist.ts`).
+  `middleware.ts` redirects every unauthenticated page to `/login`. Login UI =
+  `app/login/page.tsx` + `src/components/auth/` (the `ParticleField` canvas ported from
+  `../jaunt` behind a backdrop-blurred `LoginCard`).
 - **Pure libs** (`src/lib/*.ts`): `types`, `drawers`, `appearance`, `presets`, `storage`,
   `cloud` (client fetch layer) — ported verbatim from `../jug`, behavior unchanged.
 
@@ -64,6 +73,14 @@ Cloudflare KV the production site uses, so local edits write to real cloud state
   `src/lib/units.test.ts` — keep that line ASCII.
 - **Covers use plain `<img>`**, never `next/image` — they can be arbitrary remote URLs or
   `data:` URIs.
+- **The whole site is gated.** `middleware.ts` (NextAuth, edge-safe `auth.config.ts`)
+  bounces unauthenticated requests to `/login`; `app/page.tsx` re-checks server-side. Being
+  signed in is the only capability — `canEdit` is hard-`true` in `Dashboard.tsx`.
+- **A bcrypt hash in `.env.local` MUST escape `$`.** `@next/env` runs dotenv variable
+  expansion, so `$2b$12$…` gets corrupted (`$2b`/`$12` read as empty vars) → `bcrypt.compare`
+  silently fails. Escape each `$` as `\$` in `.env.local`; Vercel stores values literally, so
+  paste the raw hash there. The `EDIT_PASSCODE` credentials fallback is partly insurance
+  against a mangled hash. Generate one with `node scripts/hash-password.mjs`.
 - **Brand = "Dash"**; "catalogue" survives only as a common noun (the library-card metaphor).
 - **Secrets are server-only** and excluded from Vercel uploads by `.vercelignore`. Never
   import `src/lib/server/*` into a client component.
@@ -71,7 +88,17 @@ Cloudflare KV the production site uses, so local edits write to real cloud state
 
 ## Environment (all server-only)
 
-`EDIT_PASSCODE`, `AUTH_SECRET`, `CF_ACCOUNT_ID`, `CF_KV_NAMESPACE_ID`, `CF_KV_API_TOKEN`.
-Set in `.env.local` for dev and in the Vercel project for production. The CF token currently
-deployed is a broad account token — **rotating it to a KV-scoped token is a known follow-up**
-(account lacked the API-token-create permission at deploy time).
+**Auth:** `AUTH_SECRET` (NextAuth JWT signing), `AUTH_OWNER_EMAIL`, and one of
+`AUTH_PASSWORD_HASH` (bcrypt — escape `$` in `.env.local`) or `EDIT_PASSCODE` (fallback).
+`AUTH_ALLOWED_EMAILS` (comma-sep) gates OAuth. Optional OAuth apps —
+`AUTH_GITHUB_ID`/`AUTH_GITHUB_SECRET`, `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` — each pair
+lights up its button; their callback URL is
+`https://dash.brevy.dev/api/auth/callback/{github,google}`.
+
+**Storage:** `KV_REST_API_URL` + `KV_REST_API_TOKEN` (injected by the Vercel Upstash
+integration; `UPSTASH_REDIS_REST_URL`/`_TOKEN` are also accepted).
+
+**Migration-only:** `CF_ACCOUNT_ID`, `CF_KV_NAMESPACE_ID`, `CF_KV_API_TOKEN` — used solely by
+`scripts/migrate-kv.mjs` to copy the old Cloudflare KV data across; unused at runtime.
+
+Set in `.env.local` for dev and in the Vercel project for production.

@@ -1,88 +1,59 @@
 /**
- * Server-only KV adapter backed by the **Cloudflare KV REST API**.
+ * Server-only KV adapter backed by **Upstash Redis** (via the Vercel
+ * Marketplace integration).
  *
- * The source app (jug) ran on Cloudflare Pages and called `env.BOOKMARKS_KV.get
- * /put/delete` directly. On Vercel there is no KV binding, so the route handlers
- * talk to the *same* namespace over Cloudflare's REST API instead. This adapter
- * exposes the identical `get` / `put` / `del` surface so the handlers read like
- * the originals, and it is the single place to swap stores later (e.g. Upstash).
+ * The original app (jug) used Cloudflare KV; the first Vercel port talked to
+ * the same namespace over Cloudflare's REST API. This version moves the store
+ * onto Vercel-native Upstash Redis. The exported `kvGet` / `kvPut` / `kvDel`
+ * surface is unchanged, so the route handlers read exactly as before and this
+ * remains the single place to swap stores.
  *
- * Values are stored as raw JSON strings (parity with the KV source + the djb2
- * version hash in the bookmarks route).
+ * Values are raw JSON strings (parity with the KV source + the djb2 version
+ * hash in the bookmarks route). `automaticDeserialization: false` keeps the
+ * Upstash client from JSON-parsing on read / re-stringifying on write — the
+ * handlers own (de)serialization, so we want bytes in, bytes out.
  *
- * Required env (server-only — never exposed to the client bundle):
- *   CF_ACCOUNT_ID, CF_KV_NAMESPACE_ID, CF_KV_API_TOKEN
+ * Required env (server-only — never exposed to the client bundle). The Vercel
+ * Upstash integration injects the `KV_REST_API_*` pair; the `UPSTASH_REDIS_*`
+ * pair is the native name. Either works:
+ *   KV_REST_API_URL / KV_REST_API_TOKEN
+ *   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
  */
 
-const API_BASE = "https://api.cloudflare.com/client/v4";
-
-interface KvConfig {
-  accountId: string;
-  namespaceId: string;
-  token: string;
-}
-
-function config(): KvConfig {
-  const accountId = process.env.CF_ACCOUNT_ID;
-  const namespaceId = process.env.CF_KV_NAMESPACE_ID;
-  const token = process.env.CF_KV_API_TOKEN;
-  if (!accountId || !namespaceId || !token) {
-    throw new KvNotConfiguredError(
-      "KV not configured (missing CF_ACCOUNT_ID, CF_KV_NAMESPACE_ID, or CF_KV_API_TOKEN).",
-    );
-  }
-  return { accountId, namespaceId, token };
-}
+import { Redis } from "@upstash/redis";
 
 export class KvNotConfiguredError extends Error {}
 
-function valueUrl({ accountId, namespaceId }: KvConfig, key: string): string {
-  return `${API_BASE}/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(
-    key,
-  )}`;
+let client: Redis | null = null;
+
+function redis(): Redis {
+  if (client) return client;
+  const url =
+    process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL;
+  const token =
+    process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) {
+    throw new KvNotConfiguredError(
+      "KV not configured (missing KV_REST_API_URL / KV_REST_API_TOKEN, or the UPSTASH_REDIS_REST_* equivalents).",
+    );
+  }
+  client = new Redis({ url, token, automaticDeserialization: false });
+  return client;
 }
 
 /** Read a raw string value, or null when the key is absent. */
 export async function kvGet(key: string): Promise<string | null> {
-  const cfg = config();
-  const res = await fetch(valueUrl(cfg, key), {
-    headers: { Authorization: `Bearer ${cfg.token}` },
-    cache: "no-store",
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    throw new Error(`KV read failed (${res.status}): ${await res.text()}`);
-  }
-  return res.text();
+  const value = await redis().get<string | null>(key);
+  if (value == null) return null;
+  return typeof value === "string" ? value : String(value);
 }
 
 /** Write a raw string value. */
 export async function kvPut(key: string, value: string): Promise<void> {
-  const cfg = config();
-  // The REST API expects multipart/form-data with a `value` field, or a raw
-  // body. A raw text body is the simplest and is what the source KV `put`
-  // semantics map to.
-  const res = await fetch(valueUrl(cfg, key), {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${cfg.token}`,
-      "Content-Type": "text/plain",
-    },
-    body: value,
-  });
-  if (!res.ok) {
-    throw new Error(`KV write failed (${res.status}): ${await res.text()}`);
-  }
+  await redis().set(key, value);
 }
 
 /** Delete a key. */
 export async function kvDel(key: string): Promise<void> {
-  const cfg = config();
-  const res = await fetch(valueUrl(cfg, key), {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${cfg.token}` },
-  });
-  if (!res.ok && res.status !== 404) {
-    throw new Error(`KV delete failed (${res.status}): ${await res.text()}`);
-  }
+  await redis().del(key);
 }

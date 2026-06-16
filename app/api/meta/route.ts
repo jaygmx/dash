@@ -1,5 +1,6 @@
 import { Parser } from "htmlparser2";
-import { jsonResponse, verifyToken } from "@/lib/server/auth";
+import { jsonResponse, unauthorized } from "@/lib/server/http";
+import { requireOwner } from "@/lib/server/nextauth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -342,18 +343,7 @@ function parseHead(html: string): HeadMeta {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const AUTH_SECRET = process.env.AUTH_SECRET;
-  if (!AUTH_SECRET) {
-    return jsonResponse(
-      { error: "Cloud auth not configured (missing AUTH_SECRET)." },
-      { status: 500 },
-    );
-  }
-  const auth = request.headers.get("authorization") ?? "";
-  const token = auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
-  if (!token || !(await verifyToken(token, AUTH_SECRET))) {
-    return jsonResponse({ error: "Unauthorized." }, { status: 401 });
-  }
+  if (!(await requireOwner())) return unauthorized();
 
   let body: { url?: unknown } = {};
   try {

@@ -1,4 +1,5 @@
-import { jsonResponse, verifyToken } from "@/lib/server/auth";
+import { jsonResponse, unauthorized } from "@/lib/server/http";
+import { requireOwner } from "@/lib/server/nextauth";
 import { kvGet, kvPut, kvDel } from "@/lib/server/kv";
 
 export const runtime = "nodejs";
@@ -15,12 +16,8 @@ function djb2(s: string): string {
   return (h >>> 0).toString(16);
 }
 
-function bearer(request: Request): string {
-  const auth = request.headers.get("authorization") ?? "";
-  return auth.toLowerCase().startsWith("bearer ") ? auth.slice(7) : "";
-}
-
 export async function GET(): Promise<Response> {
+  if (!(await requireOwner())) return unauthorized();
   const raw = await kvGet(KEY);
   if (!raw) return jsonResponse({ bookmarks: null, version: null });
   let parsed: unknown;
@@ -36,21 +33,7 @@ export async function GET(): Promise<Response> {
 }
 
 export async function PUT(request: Request): Promise<Response> {
-  const AUTH_SECRET = process.env.AUTH_SECRET;
-  if (!AUTH_SECRET) {
-    return jsonResponse(
-      { error: "Cloud auth not configured (missing AUTH_SECRET)." },
-      { status: 500 },
-    );
-  }
-
-  const token = bearer(request);
-  if (!token || !(await verifyToken(token, AUTH_SECRET))) {
-    return jsonResponse(
-      { error: "Unauthorized — pass a valid bearer token." },
-      { status: 401 },
-    );
-  }
+  if (!(await requireOwner())) return unauthorized();
 
   let payload: { bookmarks?: unknown } = {};
   try {
@@ -78,18 +61,8 @@ export async function PUT(request: Request): Promise<Response> {
   return jsonResponse({ ok: true, version: djb2(serialized) });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
-  const AUTH_SECRET = process.env.AUTH_SECRET;
-  if (!AUTH_SECRET) {
-    return jsonResponse(
-      { error: "Cloud auth not configured (missing AUTH_SECRET)." },
-      { status: 500 },
-    );
-  }
-  const token = bearer(request);
-  if (!token || !(await verifyToken(token, AUTH_SECRET))) {
-    return jsonResponse({ error: "Unauthorized." }, { status: 401 });
-  }
+export async function DELETE(): Promise<Response> {
+  if (!(await requireOwner())) return unauthorized();
   await kvDel(KEY);
   return jsonResponse({ ok: true });
 }

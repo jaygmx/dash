@@ -1,12 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  SESSION_TTL_MS,
-  safeEqual,
-  signToken,
-  verifyToken,
-} from "@/lib/server/auth";
+import { isAllowedEmail, allowedEmails } from "@/lib/server/allowlist";
 import { normalizeAppearance, DEFAULT_APPEARANCE } from "@/lib/appearance";
 import {
   normalizeDrawers,
@@ -19,35 +14,33 @@ import { withPresets } from "@/lib/storage";
 import { normalizeUrl, hostnameOf, generateClassification } from "@/lib/storage";
 import { PRESET_BOOKMARKS } from "@/lib/presets";
 
-const SECRET = "test-secret-please-ignore";
-
-describe("auth tokens", () => {
-  it("sign → verify round-trips", async () => {
-    const expiry = Date.now() + SESSION_TTL_MS;
-    const token = await signToken(expiry, SECRET);
-    expect(token).toMatch(/^\d+\.[0-9a-f]+$/);
-    expect(await verifyToken(token, SECRET)).toBe(true);
+describe("oauth allowlist", () => {
+  // Origin: OAuth (GitHub/Google) sign-ins must be gated to the owner; an
+  // empty/missing list must admit nobody (fail closed).
+  const saved = process.env.AUTH_ALLOWED_EMAILS;
+  afterEach(() => {
+    if (saved === undefined) delete process.env.AUTH_ALLOWED_EMAILS;
+    else process.env.AUTH_ALLOWED_EMAILS = saved;
   });
 
-  it("rejects an expired token", async () => {
-    const token = await signToken(Date.now() - 1000, SECRET);
-    expect(await verifyToken(token, SECRET)).toBe(false);
+  it("fails closed when unset", () => {
+    delete process.env.AUTH_ALLOWED_EMAILS;
+    expect(allowedEmails()).toEqual([]);
+    expect(isAllowedEmail("a@b.com")).toBe(false);
   });
 
-  it("rejects a token signed with another secret", async () => {
-    const token = await signToken(Date.now() + SESSION_TTL_MS, SECRET);
-    expect(await verifyToken(token, "different-secret")).toBe(false);
+  it("matches case-insensitively and trims both sides", () => {
+    process.env.AUTH_ALLOWED_EMAILS = "Owner@Example.com, second@x.io ";
+    expect(isAllowedEmail("owner@example.com")).toBe(true);
+    expect(isAllowedEmail("  SECOND@X.IO ")).toBe(true);
+    expect(isAllowedEmail("nope@x.io")).toBe(false);
   });
 
-  it("rejects malformed tokens", async () => {
-    expect(await verifyToken("garbage", SECRET)).toBe(false);
-    expect(await verifyToken(".abc", SECRET)).toBe(false);
-  });
-
-  it("safeEqual is correct", async () => {
-    expect(await safeEqual("abc", "abc")).toBe(true);
-    expect(await safeEqual("abc", "abd")).toBe(false);
-    expect(await safeEqual("abc", "abcd")).toBe(false);
+  it("rejects empty / null / undefined", () => {
+    process.env.AUTH_ALLOWED_EMAILS = "a@b.com";
+    expect(isAllowedEmail("")).toBe(false);
+    expect(isAllowedEmail(null)).toBe(false);
+    expect(isAllowedEmail(undefined)).toBe(false);
   });
 });
 

@@ -14,11 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import type { Bookmark } from "@/lib/types";
 import { hostnameOf, normalizeUrl } from "@/lib/storage";
-import {
-  CloudUnavailableError,
-  fetchUrlMeta,
-  loadToken,
-} from "@/lib/cloud";
+import { CloudUnavailableError, fetchUrlMeta } from "@/lib/cloud";
 import type { Drawer } from "@/lib/drawers";
 
 interface BookmarkFormProps {
@@ -113,14 +109,10 @@ export function BookmarkForm({
     // Auto-fill from URL meta when both title and description are blank.
     const shouldAutoFill = !finalTitle && !finalDescription;
     if (shouldAutoFill) {
-      const tok = loadToken();
-      if (!tok) {
-        return setError("Unlock edit mode before auto-filling from URL.");
-      }
       setSubmitState({ kind: "fetching" });
       setError(null);
       try {
-        const meta = await fetchUrlMeta(normalized, tok.token);
+        const meta = await fetchUrlMeta(normalized);
         finalTitle = meta.title.trim() || hostnameOf(normalized);
         finalDescription = meta.description.trim();
         finalTags = dedupeTags(finalTags, meta.tags);

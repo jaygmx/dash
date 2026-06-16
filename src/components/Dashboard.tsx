@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Plus, Keyboard, Palette } from "lucide-react";
+import { Plus, Keyboard, Palette, LogOut } from "lucide-react";
+import { signOut } from "next-auth/react";
 import { HeroMark } from "./HeroMark";
 import { BookmarkCard } from "./BookmarkCard";
 import { BookmarkForm } from "./BookmarkForm";
@@ -10,8 +11,6 @@ import { CategoryFilter } from "./CategoryFilter";
 import { ThemeToggle } from "./ThemeToggle";
 import { ShortcutsHelp } from "./ShortcutsHelp";
 import { EmptyState } from "./EmptyState";
-import { ModeToggle } from "./ModeToggle";
-import { PasscodeDialog } from "./PasscodeDialog";
 import { LiveClock } from "./LiveClock";
 import { SyncStatusBadge } from "./SyncStatus";
 import { AppearanceDialog } from "./AppearanceDialog";
@@ -30,11 +29,9 @@ import {
 import {
   CloudUnauthorizedError,
   CloudUnavailableError,
-  clearToken,
   fetchCloudAppearance,
   fetchCloudBookmarks,
   fetchCloudDrawers,
-  loadToken,
   pushCloudAppearance,
   pushCloudBookmarks,
   pushCloudDrawers,
@@ -59,7 +56,6 @@ import {
 import type { Bookmark } from "@/lib/types";
 
 type FilterKey = string | "all" | "favorites";
-type Mode = "view" | "edit";
 
 const PUSH_DEBOUNCE_MS = 800;
 
@@ -70,8 +66,6 @@ export function Dashboard() {
   const [editing, setEditing] = React.useState<Bookmark | null>(null);
   const [formOpen, setFormOpen] = React.useState(false);
   const [helpOpen, setHelpOpen] = React.useState(false);
-  const [passcodeOpen, setPasscodeOpen] = React.useState(false);
-  const [mode, setMode] = React.useState<Mode>("view");
   const [syncStatus, setSyncStatus] = React.useState<SyncStatus>({ state: "idle" });
   const [tagFilter, setTagFilter] = React.useState<string | null>(null);
   const [appearance, setAppearance] = React.useState<Appearance>(DEFAULT_APPEARANCE);
@@ -150,13 +144,15 @@ export function Dashboard() {
         if (!cancelled) hydrated.current = true;
       });
 
-    // Restore edit-mode session if a valid token is in storage.
-    if (loadToken()) setMode("edit");
-
     return () => {
       cancelled = true;
     };
   }, []);
+
+  /** Session lapsed mid-action → send the owner back through the login wall. */
+  function redirectToLogin() {
+    window.location.assign("/login");
+  }
 
   // Mirror to local cache on every change, and debounce-push to cloud when
   // in edit mode with a valid token.
@@ -167,24 +163,15 @@ export function Dashboard() {
     const serialized = JSON.stringify(bookmarks);
     if (serialized === lastSynced.current) return;
 
-    if (mode !== "edit") return;
-    const tok = loadToken();
-    if (!tok) return;
-
     setSyncStatus({ state: "saving" });
     const timer = window.setTimeout(async () => {
       try {
-        await pushCloudBookmarks(bookmarks, tok.token);
+        await pushCloudBookmarks(bookmarks);
         lastSynced.current = serialized;
         setSyncStatus({ state: "ok", at: Date.now() });
       } catch (err) {
         if (err instanceof CloudUnauthorizedError) {
-          clearToken();
-          setMode("view");
-          setSyncStatus({
-            state: "error",
-            message: "Session expired — unlock to resume sync.",
-          });
+          redirectToLogin();
         } else if (err instanceof CloudUnavailableError) {
           setSyncStatus({ state: "offline" });
         } else {
@@ -197,15 +184,12 @@ export function Dashboard() {
     }, PUSH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(timer);
-  }, [bookmarks, mode]);
+  }, [bookmarks]);
 
-  const canEdit = mode === "edit";
+  // The whole site is behind the login wall, so an owner is always present.
+  const canEdit = true;
 
   function openNew() {
-    if (!canEdit) {
-      handleUnlockRequest();
-      return;
-    }
     setEditing(null);
     setFormOpen(true);
   }
@@ -262,42 +246,20 @@ export function Dashboard() {
     }
   }
 
-  function handleUnlock() {
-    setMode("edit");
-    // First push will catch the cloud up to current local state if it differs.
-  }
-
-  function handleLock() {
-    // Soft lock — keep the cloud session alive so re-entering edit mode in
-    // the same browser session is friction-free. The token still expires on
-    // its own (60 min), and 401s from the server clear it explicitly.
-    setMode("view");
-    setFormOpen(false);
-    setAppearanceOpen(false);
-    setDrawersOpen(false);
-  }
-
   /** Push a new drawers array to the cloud with optimistic local update +
    *  rollback on failure. Shared by add / update / delete. */
   async function commitDrawers(next: Drawer[]): Promise<void> {
-    const tok = loadToken();
-    if (!tok) throw new Error("Unlock edit mode first.");
     const prev = drawers;
     setDrawers(next);
     saveDrawersLocal(next);
     try {
-      await pushCloudDrawers(next, tok.token);
+      await pushCloudDrawers(next);
     } catch (err) {
       setDrawers(prev);
       saveDrawersLocal(prev);
       if (err instanceof CloudUnauthorizedError) {
-        clearToken();
-        setMode("view");
-        setSyncStatus({
-          state: "error",
-          message: "Session expired — unlock to resume sync.",
-        });
-        throw new Error("Session expired — unlock and try again.");
+        redirectToLogin();
+        throw new Error("Session expired — signing in again.");
       }
       throw err;
     }
@@ -329,33 +291,16 @@ export function Dashboard() {
     if (filter === key) setFilter("all");
   }
 
-  function handleUnlockRequest() {
-    // If a valid session token is already in storage, skip the passcode prompt.
-    if (loadToken()) {
-      setMode("edit");
-      return;
-    }
-    setPasscodeOpen(true);
-  }
-
   async function handleAppearanceChange(next: Appearance) {
     // Optimistic: apply + cache locally, then push to cloud.
     setAppearance(next);
     applyAppearance(next);
     saveAppearanceLocal(next);
-    if (!canEdit) return;
-    const tok = loadToken();
-    if (!tok) return;
     try {
-      await pushCloudAppearance(next, tok.token);
+      await pushCloudAppearance(next);
     } catch (err) {
       if (err instanceof CloudUnauthorizedError) {
-        clearToken();
-        setMode("view");
-        setSyncStatus({
-          state: "error",
-          message: "Session expired — unlock to resume sync.",
-        });
+        redirectToLogin();
       } else if (err instanceof CloudUnavailableError) {
         setSyncStatus({ state: "offline" });
       } else {
@@ -436,7 +381,7 @@ export function Dashboard() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [canEdit, drawers]);
+  }, [drawers]);
 
   // counts per drawer (plus `all` and `favorites`)
   const counts = React.useMemo(() => {
@@ -531,11 +476,15 @@ export function Dashboard() {
                 <span className="hidden sm:inline">Style</span>
               </button>
             )}
-            <ModeToggle
-              mode={mode}
-              onRequestUnlock={handleUnlockRequest}
-              onLock={handleLock}
-            />
+            <button
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="h-9 px-3 inline-flex items-center gap-2 border border-ink/85 dark:border-ink/30 bg-card hover:text-accent hover:border-accent focus-ring transition-colors font-mono text-[10px] uppercase tracking-[0.2em]"
+              title="Sign out"
+              aria-label="Sign out"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
             <ThemeToggle />
             {canEdit && (
               <Button
@@ -626,7 +575,7 @@ export function Dashboard() {
             <div className="hairline" />
             <p className="font-mono text-[11px] leading-relaxed text-muted-foreground mt-2 px-1">
               Dash — links worth keeping, filed by hand and synced to the
-              cloud. Read-only by default; unlock to file your own cards.
+              cloud. A private catalogue; sign out from the masthead.
             </p>
           </div>
         </aside>
@@ -718,11 +667,6 @@ export function Dashboard() {
         onSubmit={handleSubmit}
       />
       <ShortcutsHelp open={helpOpen} onOpenChange={setHelpOpen} />
-      <PasscodeDialog
-        open={passcodeOpen}
-        onOpenChange={setPasscodeOpen}
-        onUnlock={handleUnlock}
-      />
       <AppearanceDialog
         open={appearanceOpen && canEdit}
         onOpenChange={setAppearanceOpen}

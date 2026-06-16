@@ -5,9 +5,9 @@ elsewhere. Next.js (App Router) on Vercel, ported from the Astro/Cloudflare orig
 
 **Live:** [dash.brevy.dev](https://dash.brevy.dev)
 
-Read-only by default — anyone can browse, search, filter, and open links. Unlock with a
-passcode to file, edit, favorite, and delete cards; manage drawers; and change the cloud-
-synced palette + type. Sessions are short-lived HMAC bearer tokens (60 min).
+Private — the whole site sits behind a login wall (NextAuth: GitHub, Google, or an
+email + password). Once signed in you can browse, search, file, edit, favorite, and delete
+cards; manage drawers; and change the cloud-synced palette + type. Sessions are JWTs.
 
 ## Develop
 
@@ -17,11 +17,11 @@ npm run dev      # http://localhost:3000
 npm run build
 npm run start
 npm run check    # tsc --noEmit
-npm test         # vitest (auth, normalizers, meta UA guard)
+npm test         # vitest (allowlist, normalizers, meta UA guard)
 ```
 
-Local dev needs `.env.local` (see **Environment**). Edit mode and cloud sync work locally
-against the same Cloudflare KV store the production app uses.
+Local dev needs `.env.local` (see **Environment**). The site is login-gated; sign-in and
+cloud sync work locally against the same Upstash Redis store the production app uses.
 
 ## Architecture
 
@@ -33,16 +33,17 @@ against the same Cloudflare KV store the production app uses.
   (cards filing up, a "FILED" stamp, punch-holes, a self-drawing accent em-dash). All
   colors come from the theme CSS variables, so it adapts across all five palettes and
   light/dark; motion collapses to a still frame under `prefers-reduced-motion`.
-- **API** (`app/api/*/route.ts`, Node runtime): `auth` (passcode → token), `bookmarks`
-  (public GET / token PUT,DELETE), `drawers` + `appearance` (public GET / token PUT),
-  `meta` (token-gated URL metadata fetch — robots.txt aware, og/twitter image inlining,
-  JSON-LD keywords, parsed with `htmlparser2`).
-- **Storage.** `src/lib/server/kv.ts` is a thin adapter over the **Cloudflare KV REST API**
-  (`get`/`put`/`del`), reusing the original `BOOKMARKS_KV` namespace. Keys: `bookmarks:
-  default`, `drawers:default`, `appearance:default`, stored as JSON strings. Swap stores by
-  editing only this file.
-- **Auth.** `src/lib/server/auth.ts` — stateless HMAC-SHA256 tokens `<expiry>.<hexHmac>`,
-  verified purely cryptographically (never persisted); constant-time `safeEqual`.
+- **API** (`app/api/*/route.ts`, Node runtime): `auth/[...nextauth]` (NextAuth),
+  `bookmarks`, `drawers`, `appearance`, `meta` (URL metadata fetch — robots.txt aware,
+  og/twitter image inlining, JSON-LD keywords, parsed with `htmlparser2`). Every data route
+  requires the owner session (401 otherwise).
+- **Storage.** `src/lib/server/kv.ts` is a thin adapter over **Upstash Redis**
+  (`get`/`put`/`del`). Keys: `bookmarks:default`, `drawers:default`, `appearance:default`,
+  stored as JSON strings. Swap stores by editing only this file.
+- **Auth.** NextAuth v5 (`src/lib/server/nextauth.ts`) — JWT sessions, no DB. GitHub +
+  Google OAuth (gated by an email allowlist) and an email/password Credentials provider;
+  `middleware.ts` gates the whole site, and `app/login` is the only public page — its
+  particle-field backdrop is ported from `../jaunt`.
 
 ## Environment
 
@@ -51,11 +52,15 @@ the Vercel project for production.
 
 | Variable | Purpose |
 | --- | --- |
-| `EDIT_PASSCODE` | Passcode exchanged at `/api/auth` for a session token. |
-| `AUTH_SECRET` | HMAC key signing session tokens. Rotate to invalidate all sessions. |
-| `CF_ACCOUNT_ID` | Cloudflare account holding the KV namespace. |
-| `CF_KV_NAMESPACE_ID` | The `BOOKMARKS_KV` namespace id. |
-| `CF_KV_API_TOKEN` | Cloudflare API token with Workers KV read/write. |
+| `AUTH_SECRET` | NextAuth JWT signing key. Rotate to invalidate all sessions. |
+| `AUTH_OWNER_EMAIL` | The owner's email for the credentials (email/password) login. |
+| `AUTH_PASSWORD_HASH` | bcrypt hash of the owner password (escape `$` as `\$` in `.env.local`; paste raw in Vercel). Optional if `EDIT_PASSCODE` is set. |
+| `EDIT_PASSCODE` | Fallback owner password (constant-time compared) if no `AUTH_PASSWORD_HASH`. |
+| `AUTH_ALLOWED_EMAILS` | Comma-separated allowlist gating GitHub/Google sign-in. Empty = nobody. |
+| `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET` | Optional GitHub OAuth app — lights up the button. |
+| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | Optional Google OAuth app — lights up the button. |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Upstash Redis store (injected by the Vercel Upstash integration). |
+| `CF_*` (account / namespace / token) | Migration-only — used by `scripts/migrate-kv.mjs` to copy old Cloudflare KV data; unused at runtime. |
 
 ## Deploy
 

@@ -4,12 +4,11 @@ import { normalizeAppearance } from "./appearance";
 import type { Drawer } from "./drawers";
 import { DEFAULT_DRAWERS, normalizeDrawers } from "./drawers";
 
-const TOKEN_KEY = "jay.portal.cloud-token.v1";
-
-export interface CloudToken {
-  token: string;
-  expiry: number;
-}
+/**
+ * Client fetch layer. Auth is the NextAuth **session cookie** — every request
+ * is same-origin, so the cookie rides along automatically; there are no bearer
+ * tokens to manage. A 401 means the session expired (→ bounce to /login).
+ */
 
 export type SyncStatus =
   | { state: "idle" }
@@ -22,36 +21,6 @@ export type SyncStatus =
 export class CloudUnavailableError extends Error {}
 export class CloudUnauthorizedError extends Error {}
 
-/* ---------- Token (bearer) management ---------- */
-
-export function loadToken(): CloudToken | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(TOKEN_KEY);
-    if (!raw) return null;
-    const t = JSON.parse(raw) as CloudToken;
-    if (!t.token || !t.expiry || Date.now() > t.expiry) {
-      window.localStorage.removeItem(TOKEN_KEY);
-      return null;
-    }
-    return t;
-  } catch {
-    return null;
-  }
-}
-
-export function saveToken(t: CloudToken): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(TOKEN_KEY, JSON.stringify(t));
-}
-
-export function clearToken(): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(TOKEN_KEY);
-}
-
-/* ---------- API calls ---------- */
-
 async function readJson(res: Response): Promise<any> {
   try {
     return await res.json();
@@ -60,51 +29,21 @@ async function readJson(res: Response): Promise<any> {
   }
 }
 
-/** Exchange a passcode for a signed bearer token. */
-export async function requestToken(passcode: string): Promise<CloudToken> {
-  let res: Response;
-  try {
-    res = await fetch("/api/auth", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ passcode }),
-    });
-  } catch (e) {
-    throw new CloudUnavailableError(
-      "Cloud unreachable — start `wrangler pages dev` or deploy to use edit mode.",
-    );
-  }
-  if (res.status === 404) {
-    throw new CloudUnavailableError(
-      "Auth endpoint not found. Run `npm run preview:cf` or deploy to enable edit mode.",
-    );
-  }
-  if (res.status === 401) {
-    throw new CloudUnauthorizedError("Incorrect passcode.");
-  }
-  if (!res.ok) {
-    const body = await readJson(res);
-    throw new Error(body?.error ?? `Sign-in failed (${res.status}).`);
-  }
-  const body = (await res.json()) as CloudToken;
-  if (!body?.token || !body?.expiry) {
-    throw new Error("Malformed auth response.");
-  }
-  return body;
-}
-
 export interface CloudBookmarksResponse {
   bookmarks: Bookmark[] | null;
   version: string | null;
 }
 
-/** Fetch the canonical bookmark list from KV. Returns null if no cloud data. */
+/** Fetch the canonical bookmark list from the store. */
 export async function fetchCloudBookmarks(): Promise<CloudBookmarksResponse> {
   let res: Response;
   try {
     res = await fetch("/api/bookmarks", { method: "GET" });
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
+  }
+  if (res.status === 401) {
+    throw new CloudUnauthorizedError("Session expired.");
   }
   if (res.status === 404) {
     throw new CloudUnavailableError("API endpoint not found.");
@@ -113,30 +52,25 @@ export async function fetchCloudBookmarks(): Promise<CloudBookmarksResponse> {
     const body = await readJson(res);
     throw new Error(body?.error ?? `Read failed (${res.status}).`);
   }
-  const body = (await res.json()) as CloudBookmarksResponse;
-  return body;
+  return (await res.json()) as CloudBookmarksResponse;
 }
 
-/** Replace the canonical bookmark list in KV. */
+/** Replace the canonical bookmark list in the store. */
 export async function pushCloudBookmarks(
   bookmarks: Bookmark[],
-  token: string,
 ): Promise<string | null> {
   let res: Response;
   try {
     res = await fetch("/api/bookmarks", {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ bookmarks }),
     });
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
   }
   if (res.status === 401) {
-    throw new CloudUnauthorizedError("Session expired — please unlock again.");
+    throw new CloudUnauthorizedError("Session expired — please sign in again.");
   }
   if (!res.ok) {
     const body = await readJson(res);
@@ -155,6 +89,7 @@ export async function fetchCloudAppearance(): Promise<Appearance> {
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
   }
+  if (res.status === 401) throw new CloudUnauthorizedError("Session expired.");
   if (res.status === 404) {
     throw new CloudUnavailableError("API endpoint not found.");
   }
@@ -166,25 +101,19 @@ export async function fetchCloudAppearance(): Promise<Appearance> {
   return normalizeAppearance(body?.appearance);
 }
 
-export async function pushCloudAppearance(
-  appearance: Appearance,
-  token: string,
-): Promise<void> {
+export async function pushCloudAppearance(appearance: Appearance): Promise<void> {
   let res: Response;
   try {
     res = await fetch("/api/appearance", {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(appearance),
     });
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
   }
   if (res.status === 401) {
-    throw new CloudUnauthorizedError("Session expired — please unlock again.");
+    throw new CloudUnauthorizedError("Session expired — please sign in again.");
   }
   if (!res.ok) {
     const body = await readJson(res);
@@ -201,6 +130,7 @@ export async function fetchCloudDrawers(): Promise<Drawer[]> {
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
   }
+  if (res.status === 401) throw new CloudUnauthorizedError("Session expired.");
   if (res.status === 404) {
     throw new CloudUnavailableError("API endpoint not found.");
   }
@@ -213,25 +143,19 @@ export async function fetchCloudDrawers(): Promise<Drawer[]> {
   return drawers.length ? drawers : DEFAULT_DRAWERS;
 }
 
-export async function pushCloudDrawers(
-  drawers: Drawer[],
-  token: string,
-): Promise<void> {
+export async function pushCloudDrawers(drawers: Drawer[]): Promise<void> {
   let res: Response;
   try {
     res = await fetch("/api/drawers", {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ drawers }),
     });
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
   }
   if (res.status === 401) {
-    throw new CloudUnauthorizedError("Session expired — please unlock again.");
+    throw new CloudUnauthorizedError("Session expired — please sign in again.");
   }
   if (!res.ok) {
     const body = await readJson(res);
@@ -248,22 +172,19 @@ export interface UrlMeta {
   cover: string;
 }
 
-export async function fetchUrlMeta(url: string, token: string): Promise<UrlMeta> {
+export async function fetchUrlMeta(url: string): Promise<UrlMeta> {
   let res: Response;
   try {
     res = await fetch("/api/meta", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     });
   } catch {
     throw new CloudUnavailableError("Cloud unreachable.");
   }
   if (res.status === 401) {
-    throw new CloudUnauthorizedError("Session expired — please unlock again.");
+    throw new CloudUnauthorizedError("Session expired — please sign in again.");
   }
   if (!res.ok) {
     const body = await readJson(res);
@@ -273,7 +194,9 @@ export async function fetchUrlMeta(url: string, token: string): Promise<UrlMeta>
   return {
     title: typeof body.title === "string" ? body.title : "",
     description: typeof body.description === "string" ? body.description : "",
-    tags: Array.isArray(body.tags) ? body.tags.filter((t): t is string => typeof t === "string") : [],
+    tags: Array.isArray(body.tags)
+      ? body.tags.filter((t): t is string => typeof t === "string")
+      : [],
     cover: typeof body.cover === "string" ? body.cover : "",
   };
 }
