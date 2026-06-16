@@ -24,20 +24,14 @@ export const authConfig = {
       return Boolean(auth?.user);
     },
     /**
-     * Gate OAuth sign-ins behind the allowlist. Credentials sign-ins are
-     * already validated in their own `authorize()` (owner email + bcrypt),
-     * so they pass through here.
+     * Gate OAuth sign-ins: only a VERIFIED, allowlisted email may proceed.
+     * Both providers surface `email_verified` (Google natively; GitHub via the
+     * userinfo override in nextauth.ts), so the check is provider-agnostic.
+     * Credentials sign-ins already validated the password, so they pass through.
      */
     async signIn({ account, profile, user }) {
       if (!account || account.provider === "credentials") return true;
-      // Google stamps `email_verified`; refuse unverified addresses.
-      if (
-        account.provider === "google" &&
-        profile &&
-        profile.email_verified === false
-      ) {
-        return false;
-      }
+      if (profile?.email_verified !== true) return false;
       const email = (profile?.email ?? user?.email ?? "").toString();
       return isAllowedEmail(email);
     },

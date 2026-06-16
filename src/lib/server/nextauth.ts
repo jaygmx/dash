@@ -93,8 +93,11 @@ if (process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET) {
     GitHub({
       clientId: process.env.AUTH_GITHUB_ID,
       clientSecret: process.env.AUTH_GITHUB_SECRET,
-      // GitHub returns a public email only; resolve the verified primary so the
-      // allowlist check works even when the user's email is private.
+      // GitHub's default profile email can be unverified / non-primary and
+      // carries no verified flag the signIn gate can see. Resolve the VERIFIED
+      // PRIMARY email from /user/emails and stamp email_verified, so the gate
+      // enforces it in code (matches ../pkm). Without this the allowlist could
+      // be satisfied by an address the GitHub account never proved it owns.
       userinfo: {
         url: "https://api.github.com/user",
         async request({ tokens }: { tokens: { access_token?: string } }) {
@@ -105,24 +108,17 @@ if (process.env.AUTH_GITHUB_ID && process.env.AUTH_GITHUB_SECRET) {
           };
           const profile = (await fetch("https://api.github.com/user", {
             headers,
-          }).then((r) => r.json())) as Record<string, unknown> & {
-            email?: string | null;
-          };
-          if (!profile.email) {
-            const emails = (await fetch("https://api.github.com/user/emails", {
-              headers,
-            }).then((r) => r.json())) as Array<{
-              email: string;
-              primary: boolean;
-              verified: boolean;
-            }>;
-            if (Array.isArray(emails)) {
-              const primary =
-                emails.find((e) => e.primary && e.verified) ??
-                emails.find((e) => e.verified);
-              profile.email = primary?.email ?? null;
-            }
-          }
+          }).then((r) => r.json())) as Record<string, unknown>;
+          const emails = (await fetch("https://api.github.com/user/emails", {
+            headers,
+          }).then((r) => (r.ok ? r.json() : []))) as Array<{
+            email: string;
+            primary: boolean;
+            verified: boolean;
+          }>;
+          const verifiedPrimary = emails.find((e) => e.primary && e.verified);
+          profile.email = verifiedPrimary?.email ?? null;
+          profile.email_verified = Boolean(verifiedPrimary);
           return profile;
         },
       },
