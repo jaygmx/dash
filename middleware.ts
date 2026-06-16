@@ -24,6 +24,6 @@ export const config = {
   // Gate all pages. Exclude the NextAuth + data APIs (those self-gate and must
   // return JSON 401s, not HTML redirects), Next internals, and static assets.
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.svg|favicon.ico|robots.txt|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico)$).*)",
+    "/((?!api|_next/static|_next/image|favicon.svg|favicon.ico|manifest.webmanifest|robots.txt|.*\\.(?:png|jpg|jpeg|gif|svg|webp|ico)$).*)",
   ],
 };
